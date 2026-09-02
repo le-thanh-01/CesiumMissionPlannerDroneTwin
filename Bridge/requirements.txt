@@ -1,0 +1,4 @@
+# DroneTwin Bridge — Python dependencies
+# Cai bang:  pip install -r requirements.txt
+
+pymavlink>=2.4.37

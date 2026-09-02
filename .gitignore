@@ -1,0 +1,27 @@
+# ===== Unreal Engine =====
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vscode/
+.vs/
+*.VC.db
+*.opensdf
+*.opendb
+*.sdf
+*.sln
+*.suo
+*.xcodeproj
+*.xcworkspace
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ===== KHONG ignore nhung thu nay =====
+# Content/      <- .uasset cua Blueprint, BAT BUOC phai commit
+# Config/       <- cau hinh project
+# Source/       <- code C++
+# Bridge/       <- code Python
