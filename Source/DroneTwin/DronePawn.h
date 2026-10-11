@@ -9,10 +9,12 @@
 #include "Sockets.h"
 #include "Common/UdpSocketReceiver.h"
 #include "HAL/CriticalSection.h"
+#include "GameFramework/SpringArmComponent.h"
+#include "Camera/CameraComponent.h"
 #include "DronePawn.generated.h"
 
 class ACesiumGeoreference;
-
+class UStaticMesh;
 // ---------------------------------------------------------------------------
 // Goi TELEMETRY: bridge -> Unreal (UDP 14560)
 // ---------------------------------------------------------------------------
@@ -36,10 +38,11 @@ struct FDroneStatePacket
 	uint8  Armed;
 	uint8  Mode;
 	uint16 Pad;
+	uint16 MotorPwm[4];   // PWM dong co 1..4 (us), tu SERVO_OUTPUT_RAW
 };
 #pragma pack(pop)
 
-static_assert(sizeof(FDroneStatePacket) == 64, "State packet phai dung 64 byte");
+static_assert(sizeof(FDroneStatePacket) == 72, "State packet phai dung 72 byte");
 
 // ---------------------------------------------------------------------------
 // Goi CONTROL: Unreal -> bridge (UDP 14561)
@@ -78,6 +81,39 @@ struct FDroneControlPacket
 
 static_assert(sizeof(FDroneControlPacket) == 32, "Control packet phai dung 32 byte");
 
+USTRUCT(BlueprintType)
+struct FDroneMotorSlot
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) UStaticMesh* Mesh = nullptr;
+	// Toa do trong he cua BodyMesh (don vi mesh, se duoc nhan voi BodyScale)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector Location = FVector::ZeroVector;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) FRotator Rotation = FRotator::ZeroRotator;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector Scale = FVector(1.f, 1.f, 1.f);
+};
+
+USTRUCT(BlueprintType)
+struct FDroneModelPreset
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Model") FString ModelName = TEXT("Model");
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mesh") UStaticMesh* BodyMeshAsset = nullptr;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mesh") FVector BodyLocation = FVector::ZeroVector;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mesh") FVector BodyScale = FVector(1.f, 1.f, 1.f);
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Mesh") FRotator BodyRotation = FRotator::ZeroRotator;
+
+	// Dung 4 phan tu theo thu tu motor ArduCopter Quad X: 1=FR, 2=RL, 3=FL, 4=RR
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Motors") TArray<FDroneMotorSlot> Motors;
+
+	// Camera, don vi cm the gioi (SpringArm khong tu scale theo mesh)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera") float TPVArmLength = 400.f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera") FVector TPVSocketOffset = FVector(0.f, 0.f, 95.f);
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera") float TPVPitch = -15.f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Camera") FVector FPVSocketOffset = FVector(15.f, 0.f, 5.f);
+};
 
 UCLASS()
 class DRONETWIN_API ADronePawn : public APawn
@@ -155,6 +191,13 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tuning")
 		float MaxPropSpinDegPerSec = 4000.f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tuning")
+		float AltitudeOffset = -16.04f;
+	// PWM (us) ung voi 0% va 100% toc do canh quat
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tuning")
+		float MotorPwmMin = 1000.f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tuning")
+		float MotorPwmMax = 2000.f;
 
 	// ---- Telemetry doc duoc tu Blueprint ----
 	UPROPERTY(BlueprintReadOnly, Category = "Telemetry")
@@ -184,12 +227,52 @@ public:
 
 	UPROPERTY(BlueprintReadOnly, Category = "Control")
 		float StickThrottle = 0.f;
+		
+	// ---- Camera State ----
+	// ---- Danh sach mo hinh ----
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Model")
+		TArray<FDroneModelPreset> Models;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Model")
+		int32 DefaultModelIndex = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Model")
+		int32 CurrentModelIndex = -1;
+
+	UFUNCTION(BlueprintCallable, Category = "Model")
+		void SetModel(int32 Index);
+
+	UFUNCTION(BlueprintCallable, Category = "Model")
+		void NextModel();
+
+		// Nut bam trong Details luc dang Play: sua so trong Models roi bam de ap dung lai
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "Model")
+		void ReapplyModel();
+		
+	// Thong so camera dang dung (tu dong lay tu Models[CurrentModelIndex])
+	float CamTPVArmLength = 800.f;
+	FVector CamTPVSocketOffset = FVector(0.f, 0.f, 150.f);
+	float CamTPVPitch = -15.f;
+	FVector CamFPVSocketOffset = FVector(15.f, 0.f, 5.f);
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
+	bool bIsFPV = false;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
+	USpringArmComponent* SpringArm;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
+	UCameraComponent* Camera;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Control")
+	float MouseSensitivity = 1.5f;
 
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	UPROPERTY(Transient)
+	TArray<UStaticMeshComponent*> SpawnedMotors;
 	// --- nhan telemetry ---
 	void StartListening();
 	void StopListening();
